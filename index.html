@@ -71,11 +71,14 @@ document.getElementById('fileInput').onchange=async e=>{
 
   const worker = await Tesseract.createWorker({
   workerPath: 'worker-patched.js',
-  corePath: window.location.origin + window.location.pathname + 'tesseract-core-simd.js',
+  corePath: 'tesseract-core-simd.js',
   langPath: '.',
   gzip: false,
-  logger: m => { if (m.status) log(m.status + (m.progress!=null ? " " + Math.round(m.progress*100)+"%" : "")); }
+  logger: m => {
+    if (m.status) log(m.status + (m.progress != null ? " " + Math.round(m.progress*100)+"%" : ""));
+  }
 });
+
 
 
    await worker.loadLanguage('spa+eng');
