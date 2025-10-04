@@ -1,195 +1,260 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>OCR Documentos → Excel</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Extraer texto de imagen (OCR con Tesseract.js)</title>
+  <link rel="preconnect" href="https://unpkg.com">
   <style>
-    body {
-      font-family: system-ui, sans-serif;
-      background: #f6f6f6;
-      text-align: center;
-      padding: 2rem;
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 0; padding: 1rem; background: #f6f7f9; color: #111; }
+    .app { max-width: 900px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 1rem; box-shadow: 0 6px 30px rgba(0,0,0,.06); }
+    header { display: flex; align-items: center; gap: .5rem; margin-bottom: 1rem; }
+    h1 { font-size: 1.25rem; margin: 0; }
+    .controls { display: grid; gap: .75rem; grid-template-columns: 1fr; }
+    .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+    label { font-weight: 600; }
+    input[type="file"], input[type="url"], select, button, textarea {
+      padding: .6rem .7rem; border: 1px solid #dfe3e6; border-radius: 10px; background: #fff; font-size: 1rem;
     }
-    h1 { color: #222; margin-bottom: 1rem; }
-    button {
-      background: #1976d2;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      padding: 1rem 2rem;
-      font-size: 1rem;
-      cursor: pointer;
+    button { cursor: pointer; }
+    button.primary { background: #111; color: #fff; border: none; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .dropzone {
+      border: 2px dashed #c7ccd1; border-radius: 12px; padding: 1rem; text-align: center; color: #555; background: #fafbfc;
     }
-    button:hover { background: #125a9c; }
-    #log {
-      text-align: left;
-      background: white;
-      border: 1px solid #ccc;
-      border-radius: 6px;
-      padding: 1rem;
-      margin-top: 1rem;
-      max-height: 350px;
-      overflow-y: auto;
-      font-size: 0.9rem;
-      white-space: pre-wrap;
+    .dropzone.drag { background: #eef6ff; border-color: #77aaff; }
+    .preview-wrap { display: grid; grid-template-columns: 1fr; gap: .75rem; margin-top: 1rem; }
+    .preview { width: 100%; max-height: 360px; object-fit: contain; border-radius: 10px; background: #f0f2f5; }
+    progress { width: 100%; height: 14px; }
+    .out { display: grid; gap: .5rem; margin-top: 1rem; }
+    textarea { width: 100%; min-height: 180px; resize: vertical; }
+    small.hint { color: #666; }
+    footer { margin-top: 1rem; color: #667; font-size: .9rem; }
+    @media (min-width: 840px) {
+      .controls { grid-template-columns: 1fr 1fr; align-items: start; }
+      .preview-wrap { grid-template-columns: 1fr 1fr; }
     }
   </style>
-
-  <!-- ⚙️ Forzar recarga limpia y eliminar service worker -->
-  <script>
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.getRegistrations().then(list => list.forEach(r => r.unregister()));
-    caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
-  }
-  if (!location.search.includes('v=')) {
-    const v = 'v' + Math.random().toString(36).substring(2, 8);
-    location.href = location.pathname + '?' + v;
-  }
-  </script>
 </head>
 <body>
-  <h1>OCR Documentos → Excel</h1>
-  <input id="fileInput" type="file" accept="image/*" multiple hidden>
-  <button id="captureBtn">📸 Subir imágenes (anverso y reverso)</button>
+  <div class="app" role="application" aria-label="OCR en el navegador con Tesseract.js">
+    <header>
+      <h1>Extraer texto de imagen (OCR)</h1>
+    </header>
 
-  <div id="log"></div>
+    <div class="controls" id="controls">
+      <div>
+        <div class="row" aria-live="polite">
+          <label for="lang">Idioma del texto</label>
+          <select id="lang" title="Selecciona idioma">
+            <option value="spa" selected>Español (spa)</option>
+            <option value="eng">Inglés (eng)</option>
+            <option value="por">Portugués (por)</option>
+            <option value="fra">Francés (fra)</option>
+            <option value="deu">Alemán (deu)</option>
+            <option value="ita">Italiano (ita)</option>
+            <option value="cat">Catalán (cat)</option>
+          </select>
+        </div>
 
-  <!-- Librerías locales -->
-  <script src="tesseract.min.js"></script>
-  <script src="xlsx.full.min.js"></script>
+        <div class="row">
+          <label for="file">Imagen</label>
+          <input id="file" type="file" accept="image/*" capture="environment" />
+          <button id="pasteBtn" type="button">Pegar desde portapapeles</button>
+        </div>
 
+        <div class="row">
+          <label for="url">o URL de imagen</label>
+          <input id="url" type="url" placeholder="https://..." />
+          <button id="loadUrl" type="button">Cargar</button>
+        </div>
+
+        <div class="dropzone" id="dropzone" tabindex="0" aria-label="Arrastra y suelta una imagen aquí">
+          Arrastra y suelta una imagen aquí (o haz clic para seleccionar)
+        </div>
+
+        <div class="row">
+          <button id="run" class="primary" type="button">Reconocer texto</button>
+          <button id="clear" type="button">Limpiar</button>
+        </div>
+
+        <div class="row">
+          <label for="psm">Modo de segmentación (PSM)</label>
+          <select id="psm" title="Tesseract Page Segmentation Mode">
+            <option value="3" selected>3 – Automático (página completa)</option>
+            <option value="6">6 – Bloques uniformes de texto</option>
+            <option value="7">7 – Una sola línea</option>
+            <option value="8">8 – Una sola palabra</option>
+            <option value="13">13 – Línea raw, sin OSD</option>
+          </select>
+          <small class="hint">Útil si el resultado no es preciso.</small>
+        </div>
+      </div>
+
+      <div>
+        <div class="preview-wrap">
+          <img id="preview" class="preview" alt="Vista previa de la imagen" />
+          <div>
+            <label for="progress">Progreso</label>
+            <progress id="progress" max="1" value="0" aria-live="polite"></progress>
+            <div id="status" class="small hint">Listo.</div>
+          </div>
+        </div>
+        <div class="out">
+          <label for="output">Texto extraído</label>
+          <textarea id="output" placeholder="Aquí aparecerá el texto…"></textarea>
+          <button id="copy" type="button">Copiar texto</button>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      Consejos: obtendrás mejores resultados con imágenes nítidas, bien iluminadas y con el texto en horizontal.
+    </footer>
+  </div>
+
+  <!-- Tesseract.js desde CDN -->
+  <script src="https://unpkg.com/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
   <script>
-    const log = msg => {
-      const el = document.getElementById("log");
-      el.textContent += msg + "\n";
-      el.scrollTop = el.scrollHeight;
-      console.log(msg);
-    };
+    const $ = (id) => document.getElementById(id);
+    const fileInput = $('file');
+    const dropzone = $('dropzone');
+    const preview = $('preview');
+    const runBtn = $('run');
+    const clearBtn = $('clear');
+    const progressEl = $('progress');
+    const statusEl = $('status');
+    const output = $('output');
+    const copyBtn = $('copy');
+    const langSel = $('lang');
+    const urlInput = $('url');
+    const loadUrlBtn = $('loadUrl');
+    const pasteBtn = $('pasteBtn');
+    const psmSel = $('psm');
 
-    document.getElementById("captureBtn").onclick = () => document.getElementById("fileInput").click();
+    let currentBlob = null;
 
-    // === PARSERS ===
-    function parseAny(text) {
-      const up = text.toUpperCase();
-      if (up.includes("APELLIDOS") || up.includes("DOCUMENTO NACIONAL DE IDENTIDAD")) return parseDNI(text);
-      if (up.includes("PASAPORTE") || up.includes("PASSPORT") || up.includes("SURNAME")) return parsePassport(text);
-      if (/\<</.test(up)) return parseMRZ(text);
-      if (up.includes("PERMISO DE CONDUCIR") || /\b1\./.test(up)) return parseDriver(text);
-      return {};
+    function setStatus(msg) { statusEl.textContent = msg; }
+    function setProgress(v) { progressEl.value = v; }
+
+    function blobFromUrl(url) {
+      return fetch(url, { mode: 'cors' })
+        .then(r => {
+          if (!r.ok) throw new Error('No se pudo cargar la imagen.');
+          return r.blob();
+        });
     }
 
-    function parseDNI(text) {
-      const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
-      const d = {};
-      for (let i = 0; i < lines.length; i++) {
-        const up = lines[i].toUpperCase();
-        if (up.includes("APELLIDOS")) d.apellidos = lines[i+1] || "";
-        if (up.includes("NOMBRE")) d.nombre = lines[i+1] || "";
-        if (up.includes("NACIONALIDAD")) d.nacionalidad = lines[i+1] || "";
-        if (up.includes("FECHA DE NACIMIENTO")) d.fecha = lines[i+1] || "";
-        if (up.includes("SEXO")) d.sexo = (lines[i+1] || up.replace("SEXO","")).trim();
-      }
-      return d;
+    function updatePreviewFromBlob(blob) {
+      currentBlob = blob;
+      const url = URL.createObjectURL(blob);
+      preview.src = url;
+      setStatus('Imagen cargada.');
     }
 
-    function parsePassport(text) {
-      const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
-      const d = {};
-      for (let i = 0; i < lines.length; i++) {
-        const up = lines[i].toUpperCase();
-        if (up.includes("SURNAME")) d.apellidos = lines[i+1] || "";
-        if (up.includes("GIVEN NAMES")) d.nombre = lines[i+1] || "";
-        if (up.includes("NATIONALITY")) d.nacionalidad = lines[i+1] || "";
-        if (up.includes("DATE OF BIRTH")) d.fecha = lines[i+1] || "";
-        if (up.startsWith("SEX")) d.sexo = (lines[i+1] || up.replace("SEX","")).trim();
-      }
-      return d;
-    }
+    fileInput.addEventListener('change', () => {
+      const f = fileInput.files?.[0];
+      if (f) updatePreviewFromBlob(f);
+    });
 
-    function parseMRZ(text) {
-      const d = {};
-      const mrz = text.split(/\n+/).filter(l => l.includes('<'));
-      if (mrz.length) {
-        const l1 = mrz[0], l2 = mrz[1] || "";
-        const parts = l1.split('<<');
-        if (parts[0]) d.apellidos = parts[0].replace(/^.*?[A-Z]{3}/,'').replace(/</g,' ');
-        if (parts[1]) d.nombre = parts[1].replace(/</g,' ').trim();
-        const dob = l2.substr(0,6);
-        if (/\d{6}/.test(dob)) d.fecha = dob.substr(4,2)+"/"+dob.substr(2,2)+"/19"+dob.substr(0,2);
-        d.sexo = /M/.test(l2) ? "M" : (/F/.test(l2) ? "F" : "");
-        const nat = l1.substr(2,3);
-        d.nacionalidad = nat;
-      }
-      return d;
-    }
+    // Drag & drop
+    ;['dragenter','dragover'].forEach(ev =>
+      dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.add('drag'); })
+    );
+    ;['dragleave','drop'].forEach(ev =>
+      dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.remove('drag'); })
+    );
+    dropzone.addEventListener('drop', e => {
+      const f = e.dataTransfer.files?.[0];
+      if (f) updatePreviewFromBlob(f);
+    });
+    dropzone.addEventListener('click', () => fileInput.click());
 
-    function parseDriver(text) {
-      const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
-      const d = {};
-      for (let l of lines) {
-        if (/^1\./.test(l)) d.apellidos = l.replace(/^1\.\s*/, '');
-        if (/^2\./.test(l)) d.nombre = l.replace(/^2\.\s*/, '');
-        if (/^3\./.test(l)) d.fecha = l.replace(/^3\.\s*/, '');
-      }
-      return d;
-    }
-
-    // === PROCESAMIENTO DE IMÁGENES ===
-    document.getElementById("fileInput").onchange = async e => {
-      const files = Array.from(e.target.files);
-      if (!files.length) return;
-      const results = {};
-
-      for (const f of files) {
-        log("📸 Procesando: " + f.name);
-        const url = URL.createObjectURL(f);
-
-        try {
-          const { data:{ text } } = await Tesseract.recognize(url, 'spa+eng', {
-            langPath: '.', // usa modelos locales .gz
-            logger: m => { if (m.status) log(m.status + " " + Math.round(m.progress*100) + "%"); }
-          });
-
-          const parsed = parseAny(text);
-          Object.assign(results, parsed);
-          log("✅ OCR parcial: " + JSON.stringify(parsed));
-        } catch (err) {
-          log("❌ Error OCR: " + err.message);
-        }
-      }
-
-      log("📊 Datos finales: " + JSON.stringify(results, null, 2));
-
-      // === EXPORTAR A EXCEL ===
+    // Cargar desde URL
+    loadUrlBtn.addEventListener('click', async () => {
+      const url = urlInput.value.trim();
+      if (!url) return;
       try {
-        const buf = await (await fetch('1234.xlsx')).arrayBuffer();
-        const wb = XLSX.read(buf);
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const range = XLSX.utils.decode_range(ws['!ref']);
-
-        for (let R = range.s.r; R <= range.e.r; ++R) {
-          const cellAddr = XLSX.utils.encode_cell({r:R, c:0});
-          const field = ws[cellAddr] ? ws[cellAddr].v.toString().toLowerCase() : "";
-          if (field.includes("nombre") && results.nombre) ws[XLSX.utils.encode_cell({r:R,c:1})] = {v: results.nombre};
-          if (field.includes("apellidos") && results.apellidos) ws[XLSX.utils.encode_cell({r:R,c:1})] = {v: results.apellidos};
-          if (field.includes("sexo") && results.sexo) ws[XLSX.utils.encode_cell({r:R,c:1})] = {v: results.sexo};
-          if (field.includes("nacionalidad") && results.nacionalidad) ws[XLSX.utils.encode_cell({r:R,c:1})] = {v: results.nacionalidad};
-          if (field.includes("fecha") && results.fecha) ws[XLSX.utils.encode_cell({r:R,c:1})] = {v: results.fecha};
-        }
-
-        const out = XLSX.write(wb, {bookType:'xlsx', type:'array'});
-        const blob = new Blob([out], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'salida.xlsx';
-        a.click();
-        log("💾 Excel exportado correctamente.");
+        setStatus('Cargando imagen desde URL…');
+        const blob = await blobFromUrl(url);
+        updatePreviewFromBlob(blob);
       } catch (err) {
-        log("❌ Error exportando Excel: " + err.message);
+        setStatus('Error: ' + err.message);
       }
-    };
+    });
+
+    // Pegar desde portapapeles (Chrome/Edge/Opera/Arc)
+    pasteBtn.addEventListener('click', async () => {
+      try {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          for (const type of item.types) {
+            if (type.startsWith('image/')) {
+              const blob = await item.getType(type);
+              return updatePreviewFromBlob(blob);
+            }
+          }
+        }
+        setStatus('No se encontró imagen en el portapapeles.');
+      } catch (_) {
+        setStatus('Tu navegador no permite pegar imágenes desde el portapapeles.');
+      }
+    });
+
+    // Copiar resultado
+    copyBtn.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(output.value || ''); setStatus('Texto copiado.'); }
+      catch { setStatus('No se pudo copiar.'); }
+    });
+
+    clearBtn.addEventListener('click', () => {
+      currentBlob = null;
+      preview.removeAttribute('src');
+      output.value = '';
+      setProgress(0); setStatus('Listo.');
+      fileInput.value = ''; urlInput.value = '';
+    });
+
+    runBtn.addEventListener('click', async () => {
+      if (!currentBlob) return setStatus('Sube o pega una imagen primero.');
+      output.value = '';
+      setProgress(0); setStatus('Descargando modelos…');
+
+      // Configuración Tesseract
+      const lang = langSel.value || 'spa';
+      const psm = parseInt(psmSel.value, 10);
+
+      try {
+        const worker = await Tesseract.createWorker(lang, 1, {
+          logger: m => {
+            if (m.status === 'recognizing text' && m.progress != null) {
+              setStatus('Reconociendo… ' + Math.round(m.progress * 100) + '%');
+              setProgress(m.progress);
+            } else if (m.status) {
+              setStatus(m.status.charAt(0).toUpperCase() + m.status.slice(1) + '…');
+            }
+          },
+          workerPath: 'https://unpkg.com/tesseract.js@5.1.0/dist/worker.min.js',
+          corePath: 'https://unpkg.com/tesseract.js-core@5.0.0/tesseract-core.wasm.js',
+        });
+
+        // Opciones (PSM)
+        await worker.setParameters({ tessedit_pageseg_mode: psm });
+
+        setStatus('Procesando imagen…');
+        const img = currentBlob;
+
+        const { data } = await worker.recognize(img);
+        output.value = data.text.trim();
+        setProgress(1); setStatus('Completado ✔');
+
+        await worker.terminate();
+      } catch (err) {
+        console.error(err);
+        setStatus('Error durante OCR: ' + (err.message || err));
+      }
+    });
   </script>
 </body>
 </html>
