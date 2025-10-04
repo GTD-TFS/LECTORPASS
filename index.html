@@ -1,65 +1,37 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>OCR Offline → Excel</title>
 
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <meta http-equiv="Pragma" content="no-cache">
-  <meta http-equiv="Expires" content="0">
+  <!-- Cache busting básico -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
 
-  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="manifest" href="manifest.webmanifest" />
   <script>
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js')
-        .then(r => console.log('Service Worker activo:', r.scope))
-        .catch(console.warn);
-    }
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
   </script>
 
   <style>
-    body {
-      font-family: system-ui, sans-serif;
-      background: #f4f4f4;
-      color: #222;
-      text-align: center;
-      padding: 2rem;
-    }
-    button {
-      background: #007bff;
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      padding: 1rem 2rem;
-      font-size: 1.1rem;
-      cursor: pointer;
-      margin-top: 1rem;
-    }
-    button:hover { background: #0056b3; }
-    #log {
-      white-space: pre-wrap;
-      text-align: left;
-      background: #fff;
-      border: 1px solid #ccc;
-      border-radius: 6px;
-      padding: 1rem;
-      margin-top: 2rem;
-      max-height: 340px;
-      overflow: auto;
-    }
+    body { font-family: system-ui,sans-serif; background:#f4f4f4; color:#222; text-align:center; padding:2rem; }
+    button { background:#007bff; color:#fff; border:none; border-radius:8px; padding:1rem 2rem; font-size:1.1rem; cursor:pointer; margin-top:1rem; }
+    button:hover { background:#0056b3; }
+    #log { white-space:pre-wrap; text-align:left; background:#fff; border:1px solid #ccc; border-radius:6px; padding:1rem; margin-top:2rem; max-height:340px; overflow:auto; }
   </style>
 </head>
 <body>
   <h1>Captura y exportación offline</h1>
   <p>Pulsa para hacer una foto o elegir un documento.</p>
 
-  <input id="fileInput" type="file" accept="image/*" capture="environment" hidden>
-  <button id="captureBtn">📸 Capturar / Elegir imagen</button>
+  <input id="fileInput" type="file" accept="image/*" capture="environment" hidden />
+  <button id="captureBtn">📸xx Capturar / Elegir imagen</button>
 
   <div id="log"></div>
 
-  <!-- ✅ Librerías locales -->
+  <!-- Librerías locales (ya las tienes en la raíz) -->
   <script src="opencv.js"></script>
   <script src="exifr.min.js"></script>
   <script src="xlsx.full.min.js"></script>
@@ -67,15 +39,58 @@
   <script type="module" src="mrz.esm.js"></script>
 
   <script>
-  const log = msg => {
-    const el = document.getElementById('log');
-    el.textContent += msg + "\n";
-    console.log(msg);
-  };
+  // =============== LOG UI ===============
+  const log = msg => { const el = document.getElementById('log'); el.textContent += msg + "\n"; console.log(msg); };
+  document.getElementById('captureBtn').onclick = () => document.getElementById('fileInput').click();
 
-  document.getElementById('captureBtn').onclick = () =>
-    document.getElementById('fileInput').click();
+  // =============== PARCHE CLAVE (solo HTML) ===============
+  // Tesseract 4.1.1 pide *.traineddata.gz. Tú tienes *.traineddata.
+  // Aquí interceptamos fetch: si pide .gz, cogemos el .traineddata plano, lo GZIPeamos en el navegador,
+  // y devolvemos un Response .gz válido. Así NO tienes que cambiar ni renombrar archivos.
+  (function installGzipShim(){
+    const origFetch = window.fetch.bind(window);
 
+    async function gzipArrayBuffer(ab){
+      if (!('CompressionStream' in self)) {
+        throw new Error('CompressionStream no soportado por este navegador. (Usa Chrome/Edge o sube spa/eng .traineddata.gz)');
+      }
+      const cs = new CompressionStream('gzip');
+      const stream = new Response(new Blob([ab]).stream().pipeThrough(cs));
+      const gzAB = await stream.arrayBuffer();
+      return gzAB;
+    }
+
+    window.fetch = async function(resource, init){
+      let url = typeof resource === 'string' ? resource : resource.url;
+
+      // Si Tesseract pide .../spa.traineddata.gz o .../eng.traineddata.gz
+      if (url.endsWith('.traineddata.gz')) {
+        const plain = url.replace(/\.gz$/, ''); // mismo nombre, sin .gz (tú lo tienes así)
+        // Si además lo busca en /tessdata/, redirige a raíz
+        const plainFixed = plain.includes('/tessdata/') ? plain.split('/tessdata/').pop() : plain;
+
+        // Descarga el .traineddata plano y comprímelo a .gz en el navegador
+        const res = await origFetch(plainFixed, init);
+        if (!res.ok) return res; // si no existe, deja que falle para ver el 404 real
+        const ab = await res.arrayBuffer();
+        const gz = await gzipArrayBuffer(ab);
+        return new Response(gz, {
+          status: 200,
+          headers: { 'Content-Type': 'application/octet-stream' } // cuerpo es gzip válido
+        });
+      }
+
+      // Si lo busca en /tessdata/ sin .gz, remapea a la raíz
+      if (url.includes('/tessdata/') && url.endsWith('.traineddata')) {
+        const fixed = url.split('/tessdata/').pop();
+        return origFetch(fixed, init);
+      }
+
+      return origFetch(resource, init);
+    };
+  })();
+
+  // =============== OCR + Excel ===============
   document.getElementById('fileInput').onchange = async e => {
     const file = e.target.files[0];
     if (!file) return;
@@ -86,10 +101,11 @@
     try {
       log("🔍 Iniciando OCR (Tesseract 4.1.1)…");
 
-      // === CREAMOS EL WORKER (versión moderna de Tesseract) ===
+      // MUY IMPORTANTE: usa worker y core locales para offline total
       const worker = await Tesseract.createWorker({
-        langPath: window.location.origin + window.location.pathname,
-        gzip: false,
+        workerPath: 'worker.min.js',
+        corePath: 'tesseract-core-simd.js',
+        langPath: '.',     // buscará ./spa.traineddata(.gz) y ./eng.traineddata(.gz)
         logger: m => { if (m.status) log(m.status + (m.progress!=null ? " " + Math.round(m.progress*100)+"%" : "")); }
       });
 
@@ -101,22 +117,34 @@
 
       log("✅ OCR completado.\n" + text.slice(0,500));
 
-      // ---------- Exportar Excel ----------
+      // (Opcional) MRZ
+      const mrzLines = text.split(/\n/).filter(l => l.includes('<'));
+      if (mrzLines.length >= 2) {
+        try {
+          const { parse } = await import('./mrz.esm.js');
+          const res = parse(mrzLines.join('\n'));
+          log("🧾 MRZ OK:\n" + JSON.stringify(res.fields, null, 2));
+        } catch (err) {
+          log("⚠️ MRZ error: " + (err && err.message ? err.message : err));
+        }
+      }
+
+      // Exportar Excel (marca simple en B1 para verificar)
       log("📊 Cargando plantilla Excel...");
       const buf = await (await fetch('1234.xlsx')).arrayBuffer();
       const wb  = XLSX.read(buf);
       const ws  = wb.Sheets[wb.SheetNames[0]];
-      XLSX.utils.sheet_add_aoa(ws, [["OCR OK"]], { origin: "B1" });
-      const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-      const blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      XLSX.utils.sheet_add_aoa(ws, [["OCR OK"]], { origin:"B1" });
+      const out = XLSX.write(wb, { bookType:'xlsx', type:'array' });
+      const blob = new Blob([out], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const url  = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = 'salida.xlsx'; a.click();
       log("💾 Excel exportado: salida.xlsx");
 
     } catch (err) {
-      log("❌ Error OCR: " + (err.message || err));
-      log("👉 Comprueba que los archivos spa.traineddata y eng.traineddata están en la misma carpeta que index.html.");
+      log("❌ Error OCR: " + (err && err.message ? err.message : err));
+      log("Si el navegador no soporta CompressionStream, sube spa/eng como .traineddata.gz o usa Chrome/Edge.");
     }
   };
   </script>
