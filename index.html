@@ -1,111 +1,107 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OCR Offline → Excel</title>
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta http-equiv="Pragma" content="no-cache">
-<meta http-equiv="Expires" content="0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>OCR Offline → Excel</title>
 
-<link rel="manifest" href="manifest.webmanifest">
-<script>
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').then(r=>console.log('SW activo:',r.scope));
-}
-</script>
+  <!-- Evitar cachés viejas -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
 
-<style>
-body{font-family:system-ui,sans-serif;background:#f4f4f4;color:#222;text-align:center;padding:2rem}
-button{background:#007bff;color:#fff;border:none;border-radius:8px;padding:1rem 2rem;font-size:1.1rem;cursor:pointer;margin-top:1rem}
-button:hover{background:#0056b3}
-#log{white-space:pre-wrap;text-align:left;background:#fff;border:1px solid #ccc;border-radius:6px;padding:1rem;margin-top:2rem;max-height:340px;overflow:auto}
-</style>
+  <link rel="manifest" href="manifest.webmanifest" />
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js');
+    }
+  </script>
+
+  <style>
+    body { font-family: system-ui,sans-serif; background:#f4f4f4; color:#222; text-align:center; padding:2rem; }
+    button { background:#007bff; color:#fff; border:none; border-radius:8px; padding:1rem 2rem; font-size:1.1rem; cursor:pointer; margin-top:1rem; }
+    button:hover { background:#0056b3; }
+    #log { white-space:pre-wrap; text-align:left; background:#fff; border:1px solid #ccc; border-radius:6px; padding:1rem; margin-top:2rem; max-height:340px; overflow:auto; }
+  </style>
 </head>
 <body>
-<h1>Captura y exportación offline</h1>
-<p>Pulsa para hacer una foto o elegir un documento.</p>
+  <h1>Captura y exportación offline</h1>
+  <p>Pulsa para hacer una foto o elegir un documento.</p>
 
-<input id="fileInput" type="file" accept="image/*" capture="environment" hidden>
-<button id="captureBtn">📸 Capturar / Elegir imagen</button>
+  <input id="fileInput" type="file" accept="image/*" capture="environment" hidden />
+  <button id="captureBtn">📸 Capturar / Elegir imagen</button>
 
-<div id="log"></div>
+  <div id="log"></div>
 
-<!-- Librerías locales -->
-<script src="opencv.js"></script>
-<script src="exifr.min.js"></script>
-<script src="xlsx.full.min.js"></script>
-<script src="tesseract.min.js"></script>
-<script type="module" src="mrz.esm.js"></script>
+  <!-- Librerías locales -->
+  <script src="opencv.js"></script>
+  <script src="exifr.min.js"></script>
+  <script src="xlsx.full.min.js"></script>
+  <script src="tesseract.min.js"></script>
+  <script type="module" src="mrz.esm.js"></script>
 
-<script>
-const log=msg=>{const el=document.getElementById('log');el.textContent+=msg+"\\n";console.log(msg);};
-document.getElementById('captureBtn').onclick=()=>document.getElementById('fileInput').click();
+  <script>
+  const log = m => { const el = document.getElementById('log'); el.textContent += m + "\n"; console.log(m); };
+  document.getElementById('captureBtn').onclick = () => document.getElementById('fileInput').click();
 
-document.getElementById('fileInput').onchange=async e=>{
- const file=e.target.files[0];
- if(!file)return;
- log("📸 Imagen seleccionada.");
- const imageURL=URL.createObjectURL(file);
- try{
-   log("🔍 Iniciando OCR (Tesseract 4.1.1)…");
+  document.getElementById('fileInput').onchange = async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    log("📸 Imagen seleccionada.");
 
-   // --- Parche absoluto para core/wasm ---
-   const base = window.location.origin + window.location.pathname;
-   const wasmURL = base + 'tesseract-core-simd.wasm';
+    const imageURL = URL.createObjectURL(file);
 
-   // Inyecta un fetch global que reescribe cualquier intento de pedir el .wasm
-   const wasmPatch = `
-     const origFetch = self.fetch.bind(self);
-     self.fetch = async function(r,i){
-       if(typeof r==='string' && r.endsWith('tesseract-core-simd.wasm')){
-         return origFetch('${wasmURL}', i);
-       }
-       return origFetch(r,i);
-     };
-   `;
+    try {
+      log("🔍 Iniciando OCR (Tesseract 4.1.1)…");
 
-   // Crea el worker con el parche incluido
-   const blob = new Blob([wasmPatch + '\\nimportScripts("worker.min.js");'],{type:'application/javascript'});
-   const workerURL = URL.createObjectURL(blob);
+      // Usa el worker parcheado y rutas absolutas seguras en el propio worker
+      const BASE = window.location.origin + (window.location.pathname.replace(/[^/]+$/, ''));
+      const worker = await Tesseract.createWorker({
+        workerPath: BASE + 'worker-patched.js',  // <- archivo parcheado
+        corePath:   BASE + 'tesseract-core-simd.js',
+        langPath:   BASE,        // spa/eng en la raíz
+        gzip: false,
+        logger: m => { if (m.status) log(m.status + (m.progress!=null ? " " + Math.round(m.progress*100)+"%" : "")); }
+      });
 
-const worker = await Tesseract.createWorker({
-  workerPath: 'worker-patched.js',
-  corePath: 'tesseract-core-simd.js',
-  langPath: '.',
-  gzip: false,
-  logger: m => {
-    if (m.status)
-      log(m.status + (m.progress != null ? ' ' + Math.round(m.progress * 100) + '%' : ''));
-  }
-});
+      await worker.loadLanguage('spa+eng');
+      await worker.initialize('spa+eng');
 
+      const { data: { text } } = await worker.recognize(imageURL);
+      await worker.terminate();
 
+      log("✅ OCR completado.\n" + text.slice(0,500));
 
+      // (Opcional) MRZ
+      const mrzLines = text.split(/\n/).filter(l => l.includes('<'));
+      if (mrzLines.length >= 2) {
+        try {
+          const { parse } = await import('./mrz.esm.js');
+          const res = parse(mrzLines.join('\n'));
+          log("🧾 MRZ OK:\n" + JSON.stringify(res.fields, null, 2));
+        } catch (err) {
+          log("⚠️ MRZ error: " + (err && err.message ? err.message : err));
+        }
+      }
 
-   await worker.loadLanguage('spa+eng');
-   await worker.initialize('spa+eng');
+      // Exportar Excel (marca simple en B1)
+      log("📊 Cargando plantilla Excel...");
+      const buf = await (await fetch('1234.xlsx')).arrayBuffer();
+      const wb  = XLSX.read(buf);
+      const ws  = wb.Sheets[wb.SheetNames[0]];
+      XLSX.utils.sheet_add_aoa(ws, [["OCR OK"]], { origin:"B1" });
+      const out = XLSX.write(wb, { bookType:'xlsx', type:'array' });
+      const blob = new Blob([out], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url  = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'salida.xlsx'; a.click();
+      log("💾 Excel exportado: salida.xlsx");
 
-   const {data:{text}}=await worker.recognize(imageURL);
-   await worker.terminate();
-
-   log("✅ OCR completado.\\n"+text.slice(0,500));
-
-   log("📊 Cargando plantilla Excel...");
-   const buf=await (await fetch('1234.xlsx')).arrayBuffer();
-   const wb=XLSX.read(buf);
-   const ws=wb.Sheets[wb.SheetNames[0]];
-   XLSX.utils.sheet_add_aoa(ws,[["OCR OK"]],{origin:"B1"});
-   const out=XLSX.write(wb,{bookType:'xlsx',type:'array'});
-   const blobX=new Blob([out],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-   const url=URL.createObjectURL(blobX);
-   const a=document.createElement('a');
-   a.href=url;a.download='salida.xlsx';a.click();
-   log("💾 Excel exportado: salida.xlsx");
- }catch(err){
-   log("❌ Error OCR: "+(err.message||err));
- }
-};
-</script>
+    } catch (err) {
+      log("❌ Error OCR: " + (err && err.message ? err.message : err));
+    }
+  };
+  </script>
 </body>
 </html>
