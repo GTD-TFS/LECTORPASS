@@ -1,11 +1,30 @@
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open('offline-v1').then(c => c.addAll([
-    '/', '/index.html', '/app.js', '/manifest.webmanifest',
-    '/libs/opencv.js','/libs/exifr.min.js','/libs/xlsx.full.min.js',
-    '/libs/tesseract.min.js','/libs/tesseract.worker.min.js','/libs/tesseract-core-simd.js',
-    '/tessdata/eng.traineddata','/tessdata/spa.traineddata','/data/paises_es.json','/data/1234.xlsx'
-  ])));
+  e.waitUntil(
+    caches.open('offline-v1').then(cache =>
+      cache.addAll([
+        './',
+        'index.html',
+        'manifest.webmanifest',
+        'opencv.js',
+        'exifr.min.js',
+        'xlsx.full.min.js',
+        'tesseract.min.js',
+        'worker.min.js',
+        'tesseract-core-simd.js',
+        'tesseract-core-simd.wasm',
+        'mrz.esm.js',
+        'eng.traineddata',
+        'spa.traineddata',
+        'paises_es.json',
+        '1234.xlsx',
+        'icon512.png'
+      ])
+    )
+  );
 });
+
 self.addEventListener('fetch', e => {
-  e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+  e.respondWith(
+    caches.match(e.request).then(resp => resp || fetch(e.request))
+  );
 });
