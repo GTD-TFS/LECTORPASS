@@ -69,13 +69,14 @@ document.getElementById('fileInput').onchange=async e=>{
    const blob = new Blob([wasmPatch + '\\nimportScripts("worker.min.js");'],{type:'application/javascript'});
    const workerURL = URL.createObjectURL(blob);
 
-   const worker = await Tesseract.createWorker({
-     workerPath: workerURL,
-     corePath: base + 'tesseract-core-simd.js',
-     langPath: base,
-     gzip:false,
-     logger:m=>{if(m.status)log(m.status+(m.progress!=null?" "+Math.round(m.progress*100)+"%":""));}
-   });
+  const worker = await Tesseract.createWorker({
+  workerPath: 'worker-patched.js',
+  corePath: window.location.origin + window.location.pathname + 'tesseract-core-simd.js',
+  langPath: '.',
+  gzip: false,
+  logger: m => { if (m.status) log(m.status + (m.progress!=null ? " " + Math.round(m.progress*100)+"%" : "")); }
+});
+
 
    await worker.loadLanguage('spa+eng');
    await worker.initialize('spa+eng');
