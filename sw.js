@@ -1,10 +1,14 @@
+const CACHE_NAME = 'offline-v2'; // <-- cambia el número al actualizar
+
 self.addEventListener('install', e => {
+  self.skipWaiting(); // fuerza activación inmediata
   e.waitUntil(
-    caches.open('offline-v1').then(cache =>
+    caches.open(CACHE_NAME).then(cache =>
       cache.addAll([
         './',
         'index.html',
         'manifest.webmanifest',
+        'icon512.png',
         'opencv.js',
         'exifr.min.js',
         'xlsx.full.min.js',
@@ -15,16 +19,25 @@ self.addEventListener('install', e => {
         'mrz.esm.js',
         'eng.traineddata',
         'spa.traineddata',
-        'paises_es.json',
         '1234.xlsx',
-        'icon512.png'
+        'paises_es.json'
       ])
     )
   );
 });
 
+self.addEventListener('activate', e => {
+  // elimina versiones viejas del cache
+  e.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(keys.map(k => k !== CACHE_NAME && caches.delete(k)))
+    )
+  );
+  self.clients.claim();
+});
+
 self.addEventListener('fetch', e => {
   e.respondWith(
-    caches.match(e.request).then(resp => resp || fetch(e.request))
+    caches.match(e.request).then(r => r || fetch(e.request))
   );
 });
