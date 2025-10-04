@@ -7,41 +7,14 @@
 
   <link rel="manifest" href="manifest.webmanifest">
   <script>
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js');
-    }
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
   </script>
 
   <style>
-    body {
-      font-family: system-ui,sans-serif;
-      background:#f4f4f4;
-      color:#222;
-      text-align:center;
-      padding:2rem;
-    }
-    button {
-      background:#007bff;
-      color:#fff;
-      border:none;
-      border-radius:8px;
-      padding:1rem 2rem;
-      font-size:1.1rem;
-      cursor:pointer;
-      margin-top:1rem;
-    }
+    body { font-family: system-ui,sans-serif; background:#f4f4f4; color:#222; text-align:center; padding:2rem; }
+    button { background:#007bff; color:#fff; border:none; border-radius:8px; padding:1rem 2rem; font-size:1.1rem; cursor:pointer; margin-top:1rem; }
     button:hover { background:#0056b3; }
-    #log {
-      white-space:pre-wrap;
-      text-align:left;
-      background:#fff;
-      border:1px solid #ccc;
-      border-radius:6px;
-      padding:1rem;
-      margin-top:2rem;
-      max-height:340px;
-      overflow:auto;
-    }
+    #log { white-space:pre-wrap; text-align:left; background:#fff; border:1px solid #ccc; border-radius:6px; padding:1rem; margin-top:2rem; max-height:340px; overflow:auto; }
   </style>
 </head>
 <body>
@@ -49,34 +22,30 @@
   <p>Pulsa para hacer una foto o elegir un documento.</p>
 
   <input id="fileInput" type="file" accept="image/*" capture="environment" hidden>
-  <button id="captureBtn">📸 Capturar / Elegir imagen</button>
+  <button id="captureBtn">📸 📸 Capturar / Elegir imagen</button>
 
   <div id="log"></div>
 
-  <!-- Librerías locales (mismo nivel que este HTML) -->
+  <!-- Librerías locales -->
   <script src="opencv.js"></script>
   <script src="exifr.min.js"></script>
   <script src="xlsx.full.min.js"></script>
   <script src="tesseract.min.js"></script>
-  <script src="tesseract-core-simd.js"></script>
   <script type="module" src="mrz.esm.js"></script>
 
   <script>
   const $log = document.getElementById('log');
-  const log = m => { $log.textContent += m + "\n"; console.log(m); };
+  const log = msg => { $log.textContent += msg + "\n"; console.log(msg); };
 
   document.getElementById('captureBtn').onclick = () =>
     document.getElementById('fileInput').click();
 
-  // 🔧 Parche para .traineddata sin .gz
+  // Parche para .traineddata sin .gz
   const origFetch = window.fetch.bind(window);
-  window.fetch = async function(resource, init) {
-    let url = (typeof resource === 'string') ? resource : resource.url;
-    if (url.endsWith('.traineddata.gz')) {
-      url = url.replace(/\.gz$/, '');
-      resource = url;
-    }
-    return origFetch(resource, init);
+  window.fetch = async (res, init) => {
+    let url = typeof res === 'string' ? res : res.url;
+    if (url.endsWith('.traineddata.gz')) url = url.replace(/\.gz$/, '');
+    return origFetch(url, init);
   };
 
   document.getElementById('fileInput').onchange = async e => {
@@ -87,26 +56,22 @@
     const imageURL = URL.createObjectURL(file);
 
     try {
-      log("🔍 Iniciando OCR (modo compatibilidad)...");
+      log("🔍 Iniciando OCR (modo clásico, sin worker)...");
 
-      // Creación del worker (modo robusto para versiones 2–4)
-      const worker = Tesseract.createWorker({
-        workerPath: 'worker.min.js',
-        corePath: 'tesseract-core-simd.js',
-        langPath: '.',
-        gzip: false
-      });
+      const result = await Tesseract.recognize(
+        imageURL,
+        'spa+eng',
+        {
+          langPath: '.',
+          gzip: false,
+          logger: m => {
+            if (m.status) log(m.status + (m.progress!=null ? " " + Math.round(m.progress*100)+"%" : ""));
+          }
+        }
+      );
 
-      await worker.load();
-      await worker.loadLanguage('spa+eng');
-      await worker.initialize('spa+eng');
-
-      log("🧠 Reconociendo texto...");
-      const { data: { text } } = await worker.recognize(imageURL);
-      await worker.terminate();
-
-      log("✅ OCR completado.");
-      log("Texto detectado:\n" + text.slice(0, 500));
+      const text = result.data.text || "";
+      log("✅ OCR completado.\nTexto detectado:\n" + text.slice(0,500));
 
       // ---------- MRZ ----------
       const mrzLines = text.split(/\n/).filter(l => l.includes('<'));
@@ -116,9 +81,7 @@
           const { parse } = await import('./mrz.esm.js');
           const res = parse(mrzLines.join('\n'));
           log("✅ MRZ OK:\n" + JSON.stringify(res.fields, null, 2));
-        } catch (err) {
-          log("⚠️ MRZ error: " + err);
-        }
+        } catch (err) { log("⚠️ MRZ error: " + err); }
       }
 
       // ---------- Excel ----------
@@ -126,20 +89,16 @@
       const buf = await (await fetch('1234.xlsx')).arrayBuffer();
       const wb  = XLSX.read(buf);
       const ws  = wb.Sheets[wb.SheetNames[0]];
-      // Marca de verificación
       XLSX.utils.sheet_add_aoa(ws, [["OCR OK"]], { origin:"B1" });
       const out = XLSX.write(wb, { bookType:'xlsx', type:'array' });
-      const blob = new Blob([out], {
-        type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      });
+      const blob = new Blob([out], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = 'salida.xlsx'; a.click();
       log("💾 Excel exportado: salida.xlsx");
 
     } catch (err) {
-      log("❌ Error OCR: " + (err && err.message ? err.message : err));
-      log("Comprueba que existen y se pueden leer: worker.min.js, tesseract-core-simd.js/.wasm y modelos spa/eng.");
+      log("❌ Error OCR: " + (err.message || err));
     }
   };
   </script>
