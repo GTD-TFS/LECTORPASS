@@ -1,152 +1,105 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>OCR Offline → Excel</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OCR Offline → Excel</title>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 
-  <!-- Cache busting básico -->
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta http-equiv="Pragma" content="no-cache" />
-  <meta http-equiv="Expires" content="0" />
+<link rel="manifest" href="manifest.webmanifest">
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').then(r=>console.log('SW activo:',r.scope));
+}
+</script>
 
-  <link rel="manifest" href="manifest.webmanifest" />
-  <script>
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
-  </script>
-
-  <style>
-    body { font-family: system-ui,sans-serif; background:#f4f4f4; color:#222; text-align:center; padding:2rem; }
-    button { background:#007bff; color:#fff; border:none; border-radius:8px; padding:1rem 2rem; font-size:1.1rem; cursor:pointer; margin-top:1rem; }
-    button:hover { background:#0056b3; }
-    #log { white-space:pre-wrap; text-align:left; background:#fff; border:1px solid #ccc; border-radius:6px; padding:1rem; margin-top:2rem; max-height:340px; overflow:auto; }
-  </style>
+<style>
+body{font-family:system-ui,sans-serif;background:#f4f4f4;color:#222;text-align:center;padding:2rem}
+button{background:#007bff;color:#fff;border:none;border-radius:8px;padding:1rem 2rem;font-size:1.1rem;cursor:pointer;margin-top:1rem}
+button:hover{background:#0056b3}
+#log{white-space:pre-wrap;text-align:left;background:#fff;border:1px solid #ccc;border-radius:6px;padding:1rem;margin-top:2rem;max-height:340px;overflow:auto}
+</style>
 </head>
 <body>
-  <h1>Captura y exportación offline</h1>
-  <p>Pulsa para hacer una foto o elegir un documento.</p>
+<h1>Captura y exportación offline</h1>
+<p>Pulsa para hacer una foto o elegir un documento.</p>
 
-  <input id="fileInput" type="file" accept="image/*" capture="environment" hidden />
-  <button id="captureBtn">📸xx Capturar / Elegir imagen</button>
+<input id="fileInput" type="file" accept="image/*" capture="environment" hidden>
+<button id="captureBtn">📸 Capturar / Elegir imagen</button>
 
-  <div id="log"></div>
+<div id="log"></div>
 
-  <!-- Librerías locales (ya las tienes en la raíz) -->
-  <script src="opencv.js"></script>
-  <script src="exifr.min.js"></script>
-  <script src="xlsx.full.min.js"></script>
-  <script src="tesseract.min.js"></script>
-  <script type="module" src="mrz.esm.js"></script>
+<!-- Librerías locales -->
+<script src="opencv.js"></script>
+<script src="exifr.min.js"></script>
+<script src="xlsx.full.min.js"></script>
+<script src="tesseract.min.js"></script>
+<script type="module" src="mrz.esm.js"></script>
 
-  <script>
-  // =============== LOG UI ===============
-  const log = msg => { const el = document.getElementById('log'); el.textContent += msg + "\n"; console.log(msg); };
-  document.getElementById('captureBtn').onclick = () => document.getElementById('fileInput').click();
+<script>
+const log=msg=>{const el=document.getElementById('log');el.textContent+=msg+"\\n";console.log(msg);};
+document.getElementById('captureBtn').onclick=()=>document.getElementById('fileInput').click();
 
-  // =============== PARCHE CLAVE (solo HTML) ===============
-  // Tesseract 4.1.1 pide *.traineddata.gz. Tú tienes *.traineddata.
-  // Aquí interceptamos fetch: si pide .gz, cogemos el .traineddata plano, lo GZIPeamos en el navegador,
-  // y devolvemos un Response .gz válido. Así NO tienes que cambiar ni renombrar archivos.
-  (function installGzipShim(){
-    const origFetch = window.fetch.bind(window);
+document.getElementById('fileInput').onchange=async e=>{
+ const file=e.target.files[0];
+ if(!file)return;
+ log("📸 Imagen seleccionada.");
+ const imageURL=URL.createObjectURL(file);
+ try{
+   log("🔍 Iniciando OCR (Tesseract 4.1.1)…");
 
-    async function gzipArrayBuffer(ab){
-      if (!('CompressionStream' in self)) {
-        throw new Error('CompressionStream no soportado por este navegador. (Usa Chrome/Edge o sube spa/eng .traineddata.gz)');
-      }
-      const cs = new CompressionStream('gzip');
-      const stream = new Response(new Blob([ab]).stream().pipeThrough(cs));
-      const gzAB = await stream.arrayBuffer();
-      return gzAB;
-    }
+   // --- Parche absoluto para core/wasm ---
+   const base = window.location.origin + window.location.pathname;
+   const wasmURL = base + 'tesseract-core-simd.wasm';
 
-    window.fetch = async function(resource, init){
-      let url = typeof resource === 'string' ? resource : resource.url;
+   // Inyecta un fetch global que reescribe cualquier intento de pedir el .wasm
+   const wasmPatch = `
+     const origFetch = self.fetch.bind(self);
+     self.fetch = async function(r,i){
+       if(typeof r==='string' && r.endsWith('tesseract-core-simd.wasm')){
+         return origFetch('${wasmURL}', i);
+       }
+       return origFetch(r,i);
+     };
+   `;
 
-      // Si Tesseract pide .../spa.traineddata.gz o .../eng.traineddata.gz
-      if (url.endsWith('.traineddata.gz')) {
-        const plain = url.replace(/\.gz$/, ''); // mismo nombre, sin .gz (tú lo tienes así)
-        // Si además lo busca en /tessdata/, redirige a raíz
-        const plainFixed = plain.includes('/tessdata/') ? plain.split('/tessdata/').pop() : plain;
+   // Crea el worker con el parche incluido
+   const blob = new Blob([wasmPatch + '\\nimportScripts("worker.min.js");'],{type:'application/javascript'});
+   const workerURL = URL.createObjectURL(blob);
 
-        // Descarga el .traineddata plano y comprímelo a .gz en el navegador
-        const res = await origFetch(plainFixed, init);
-        if (!res.ok) return res; // si no existe, deja que falle para ver el 404 real
-        const ab = await res.arrayBuffer();
-        const gz = await gzipArrayBuffer(ab);
-        return new Response(gz, {
-          status: 200,
-          headers: { 'Content-Type': 'application/octet-stream' } // cuerpo es gzip válido
-        });
-      }
+   const worker = await Tesseract.createWorker({
+     workerPath: workerURL,
+     corePath: base + 'tesseract-core-simd.js',
+     langPath: base,
+     gzip:false,
+     logger:m=>{if(m.status)log(m.status+(m.progress!=null?" "+Math.round(m.progress*100)+"%":""));}
+   });
 
-      // Si lo busca en /tessdata/ sin .gz, remapea a la raíz
-      if (url.includes('/tessdata/') && url.endsWith('.traineddata')) {
-        const fixed = url.split('/tessdata/').pop();
-        return origFetch(fixed, init);
-      }
+   await worker.loadLanguage('spa+eng');
+   await worker.initialize('spa+eng');
 
-      return origFetch(resource, init);
-    };
-  })();
+   const {data:{text}}=await worker.recognize(imageURL);
+   await worker.terminate();
 
-  // =============== OCR + Excel ===============
-  document.getElementById('fileInput').onchange = async e => {
-    const file = e.target.files[0];
-    if (!file) return;
-    log("📸 Imagen seleccionada.");
+   log("✅ OCR completado.\\n"+text.slice(0,500));
 
-    const imageURL = URL.createObjectURL(file);
-
-    try {
-      log("🔍 Iniciando OCR (Tesseract 4.1.1)…");
-
-      // MUY IMPORTANTE: usa worker y core locales para offline total
-      const worker = await Tesseract.createWorker({
-        workerPath: 'worker.min.js',
-        corePath: 'tesseract-core-simd.js',
-        langPath: '.',     // buscará ./spa.traineddata(.gz) y ./eng.traineddata(.gz)
-        logger: m => { if (m.status) log(m.status + (m.progress!=null ? " " + Math.round(m.progress*100)+"%" : "")); }
-      });
-
-      await worker.loadLanguage('spa+eng');
-      await worker.initialize('spa+eng');
-
-      const { data: { text } } = await worker.recognize(imageURL);
-      await worker.terminate();
-
-      log("✅ OCR completado.\n" + text.slice(0,500));
-
-      // (Opcional) MRZ
-      const mrzLines = text.split(/\n/).filter(l => l.includes('<'));
-      if (mrzLines.length >= 2) {
-        try {
-          const { parse } = await import('./mrz.esm.js');
-          const res = parse(mrzLines.join('\n'));
-          log("🧾 MRZ OK:\n" + JSON.stringify(res.fields, null, 2));
-        } catch (err) {
-          log("⚠️ MRZ error: " + (err && err.message ? err.message : err));
-        }
-      }
-
-      // Exportar Excel (marca simple en B1 para verificar)
-      log("📊 Cargando plantilla Excel...");
-      const buf = await (await fetch('1234.xlsx')).arrayBuffer();
-      const wb  = XLSX.read(buf);
-      const ws  = wb.Sheets[wb.SheetNames[0]];
-      XLSX.utils.sheet_add_aoa(ws, [["OCR OK"]], { origin:"B1" });
-      const out = XLSX.write(wb, { bookType:'xlsx', type:'array' });
-      const blob = new Blob([out], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const url  = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = 'salida.xlsx'; a.click();
-      log("💾 Excel exportado: salida.xlsx");
-
-    } catch (err) {
-      log("❌ Error OCR: " + (err && err.message ? err.message : err));
-      log("Si el navegador no soporta CompressionStream, sube spa/eng como .traineddata.gz o usa Chrome/Edge.");
-    }
-  };
-  </script>
+   log("📊 Cargando plantilla Excel...");
+   const buf=await (await fetch('1234.xlsx')).arrayBuffer();
+   const wb=XLSX.read(buf);
+   const ws=wb.Sheets[wb.SheetNames[0]];
+   XLSX.utils.sheet_add_aoa(ws,[["OCR OK"]],{origin:"B1"});
+   const out=XLSX.write(wb,{bookType:'xlsx',type:'array'});
+   const blobX=new Blob([out],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+   const url=URL.createObjectURL(blobX);
+   const a=document.createElement('a');
+   a.href=url;a.download='salida.xlsx';a.click();
+   log("💾 Excel exportado: salida.xlsx");
+ }catch(err){
+   log("❌ Error OCR: "+(err.message||err));
+ }
+};
+</script>
 </body>
 </html>
