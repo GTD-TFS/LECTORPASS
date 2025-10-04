@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>OCR Offline → Excel</title>
 
+  <!-- Manifest y Service Worker -->
   <link rel="manifest" href="manifest.webmanifest" />
   <script>
     if ('serviceWorker' in navigator) {
@@ -28,105 +29,86 @@
 
   <div id="log"></div>
 
-  <!-- Librerías locales (mismo directorio) -->
+  <!-- Librerías locales (todas en la misma carpeta) -->
   <script src="opencv.js"></script>
   <script src="exifr.min.js"></script>
   <script src="xlsx.full.min.js"></script>
   <script src="tesseract.min.js"></script>
-  <!-- OJO: no insertar worker.min.js como <script>; lo carga internamente Tesseract -->
+  <!-- ⚠️ worker.min.js no lo metas como <script>, lo usa internamente Tesseract -->
   <script src="tesseract-core-simd.js"></script>
-  <!-- MRZ como módulo -->
+  <!-- Parser MRZ (ESM) -->
   <script type="module" src="mrz.esm.js"></script>
 
   <script>
   const $log = document.getElementById('log');
-  const log = (m) => { $log.textContent += m + "\n"; console.log(m); };
+  const log = m => { $log.textContent += m + "\n"; console.log(m); };
 
   document.getElementById('captureBtn').onclick = () => document.getElementById('fileInput').click();
 
-  // --- Parche para usar .traineddata sin .gz SIN tocar tus archivos ---
-  // 1) Forzamos a Tesseract v5 a NO esperar gzip
-  // 2) Redirigimos cualquier petición *.traineddata.gz -> *.traineddata
-  function installNoGzipShim() {
-    // Monkeypatch de createWorker para inyectar gzip:false
-    const origCreateWorker = Tesseract.createWorker;
-    Tesseract.createWorker = function(opts={}, ...rest) {
-      const patched = Object.assign({ gzip: false }, opts); // clave: gzip:false
-      return origCreateWorker(patched, ...rest);
-    };
+  // ⚙️ Ajuste para que Tesseract acepte .traineddata sin .gz
+  const origFetch = window.fetch.bind(window);
+  window.fetch = async function(resource, init) {
+    let url = (typeof resource === 'string') ? resource : resource.url;
+    if (url.endsWith('.traineddata.gz')) {
+      url = url.replace(/\.gz$/, ''); // usar tus .traineddata planos
+      resource = url;
+    }
+    return origFetch(resource, init);
+  };
 
-    // Redirección de fetch para nombres .gz -> sin .gz
-    const origFetch = window.fetch.bind(window);
-    window.fetch = async function(resource, init) {
-      try {
-        let url = (typeof resource === 'string') ? resource : resource.url;
-        if (url.endsWith('.traineddata.gz')) {
-          url = url.replace(/\.gz$/, ''); // apunta al archivo que tú ya tienes
-          resource = url;
-        }
-      } catch {}
-      return origFetch(resource, init);
-    };
-  }
-
-  installNoGzipShim();
-
-  document.getElementById('fileInput').onchange = async (e) => {
+  document.getElementById('fileInput').onchange = async e => {
     const file = e.target.files[0];
     if (!file) return;
-    log('📸 Imagen seleccionada.');
+    log("📸 Imagen seleccionada.");
 
     const imageURL = URL.createObjectURL(file);
 
     try {
-      log('🔍 Cargando OCR (worker/wasm/modelos, sin .gz)…');
+      log("🔍 Iniciando OCR…");
 
-      // IMPORTANTE: no incluyas worker.min.js como <script>; Tesseract lo cargará él.
-      const worker = await Tesseract.createWorker({
-        workerPath: 'worker.min.js',         // ya lo tienes en la carpeta
-        corePath:   'tesseract-core-simd.js',// ya lo tienes en la carpeta
-        langPath:   '.',                     // buscará ./eng.traineddata y ./spa.traineddata
-        logger: m => { if (m.status) log(m.status + (m.progress!=null ? ' ' + Math.round(m.progress*100)+'%' : '')); }
+      // Logger fuera del worker
+      Tesseract.setLogger(m => {
+        if (m.status) log(m.status + (m.progress!=null ? " " + Math.round(m.progress*100)+"%" : ""));
       });
 
-      // Carga de idiomas locales SIN .gz gracias al shim
+      const worker = await Tesseract.createWorker({
+        workerPath: 'worker.min.js',
+        corePath: 'tesseract-core-simd.js',
+        langPath: '.',
+        gzip: false
+      });
+
       await worker.loadLanguage('spa+eng');
       await worker.initialize('spa+eng');
-
       const { data: { text } } = await worker.recognize(imageURL);
       await worker.terminate();
-      log('✅ OCR completado.');
+      log("✅ OCR completado.");
 
-      // Intento MRZ si hay líneas con '<'
+      // MRZ si hay
       const mrzLines = text.split(/\n/).filter(l => l.includes('<'));
       if (mrzLines.length >= 2) {
-        log('🧾 MRZ detectada. Interpretando…');
+        log("🧾 MRZ detectada. Interpretando…");
         try {
           const { parse } = await import('./mrz.esm.js');
           const res = parse(mrzLines.join('\n'));
-          log('✅ MRZ OK:\n' + JSON.stringify(res.fields, null, 2));
-        } catch (err) { log('⚠️ MRZ error: ' + err); }
-      } else {
-        log('ℹ️ No se detectó MRZ, se usará OCR general.');
+          log("✅ MRZ OK:\n" + JSON.stringify(res.fields, null, 2));
+        } catch (err) { log("⚠️ MRZ error: " + err); }
       }
 
-      // --- Ejemplo mínimo: abrir plantilla y escribir algo para verificar exportación ---
+      // Excel
       const buf = await (await fetch('1234.xlsx')).arrayBuffer();
       const wb  = XLSX.read(buf);
       const ws  = wb.Sheets[wb.SheetNames[0]];
-      // Marca de verificación en B1 (NO toca tus nombres de campo; es solo para confirmar escritura)
-      XLSX.utils.sheet_add_aoa(ws, [[ "OK OCR" ]], { origin: "B1" });
-
+      XLSX.utils.sheet_add_aoa(ws, [["OK OCR"]], { origin:"B1" });
       const out = XLSX.write(wb, { bookType:'xlsx', type:'array' });
       const blob = new Blob([out], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const url  = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = 'salida.xlsx'; a.click();
-      log('💾 Excel exportado: salida.xlsx');
+      log("💾 Excel exportado: salida.xlsx");
 
     } catch (err) {
-      log('❌ Error OCR: ' + (err && err.message ? err.message : err));
-      log('Comprueba que están en la carpeta: worker.min.js, tesseract-core-simd.js, tesseract-core-simd.wasm, eng.traineddata, spa.traineddata');
+      log("❌ Error OCR: " + (err && err.message ? err.message : err));
     }
   };
   </script>
