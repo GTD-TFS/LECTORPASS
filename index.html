@@ -1,11 +1,11 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>OCR Offline → Excel</title>
 
-  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="manifest" href="manifest.webmanifest" />
   <script>
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
   </script>
@@ -22,11 +22,11 @@
   <p>Pulsa para hacer una foto o elegir un documento.</p>
 
   <input id="fileInput" type="file" accept="image/*" capture="environment" hidden>
-  <button id="captureBtn">📸 Capturar / 📸 Elegir imagen</button>
+  <button id="captureBtn">📸 Capturar / Elegir imagen</button>
 
   <div id="log"></div>
 
-  <!-- Librerías locales -->
+  <!-- Librerías locales (todo en la misma carpeta) -->
   <script src="opencv.js"></script>
   <script src="exifr.min.js"></script>
   <script src="xlsx.full.min.js"></script>
@@ -35,18 +35,55 @@
 
   <script>
   const $log = document.getElementById('log');
-  const log = msg => { $log.textContent += msg + "\n"; console.log(msg); };
+  const log = msg => { $log.textContent += msg + "\\n"; console.log(msg); };
 
   document.getElementById('captureBtn').onclick = () =>
     document.getElementById('fileInput').click();
 
-  // Parche para .traineddata sin .gz
+  // 🔧 Parche: si la lib intenta pedir *.traineddata.gz, servimos el mismo nombre sin .gz (porque tú tienes .traineddata plano)
   const origFetch = window.fetch.bind(window);
   window.fetch = async (res, init) => {
     let url = typeof res === 'string' ? res : res.url;
     if (url.endsWith('.traineddata.gz')) url = url.replace(/\.gz$/, '');
     return origFetch(url, init);
   };
+
+  async function ocrClassic(imageURL, lang) {
+    log(`🔍 Iniciando OCR (modo clásico) con idioma: ${lang} ...`);
+    const result = await Tesseract.recognize(
+      imageURL,
+      lang,
+      {
+        // Para builds antiguas, estas opciones son soportadas
+        langPath: '.',
+        gzip: false,
+        logger: m => {
+          if (m && m.status) {
+            log(m.status + (m.progress != null ? " " + Math.round(m.progress*100)+"%" : ""));
+          }
+        }
+      }
+    );
+    return result;
+  }
+
+  async function doOCRWithFallbacks(imageURL) {
+    const langs = ['spa+eng', 'eng', 'spa'];
+    let lastErr = null;
+    for (const lang of langs) {
+      try {
+        const res = await ocrClassic(imageURL, lang);
+        if (res && res.data && res.data.text != null) {
+          log("✅ OCR completado con " + lang);
+          return res.data.text;
+        }
+      } catch (err) {
+        lastErr = err;
+        log("⚠️ Falla OCR con " + lang + ": " + (err && err.message ? err.message : err));
+      }
+    }
+    throw lastErr || new Error("OCR no disponible");
+  }
 
   document.getElementById('fileInput').onchange = async e => {
     const file = e.target.files[0];
@@ -56,32 +93,22 @@
     const imageURL = URL.createObjectURL(file);
 
     try {
-      log("🔍 Iniciando OCR (modo clásico, sin worker)...");
-
-      const result = await Tesseract.recognize(
-        imageURL,
-        'spa+eng',
-        {
-          langPath: '.',
-          gzip: false,
-          logger: m => {
-            if (m.status) log(m.status + (m.progress!=null ? " " + Math.round(m.progress*100)+"%" : ""));
-          }
-        }
-      );
-
-      const text = result.data.text || "";
-      log("✅ OCR completado.\nTexto detectado:\n" + text.slice(0,500));
+      const text = await doOCRWithFallbacks(imageURL);
+      log("📝 Texto (primeros 500 chars):\\n" + text.slice(0,500));
 
       // ---------- MRZ ----------
-      const mrzLines = text.split(/\n/).filter(l => l.includes('<'));
+      const mrzLines = text.split(/\\n/).filter(l => l.includes('<'));
       if (mrzLines.length >= 2) {
         log("🧾 MRZ detectada. Interpretando...");
         try {
           const { parse } = await import('./mrz.esm.js');
-          const res = parse(mrzLines.join('\n'));
-          log("✅ MRZ OK:\n" + JSON.stringify(res.fields, null, 2));
-        } catch (err) { log("⚠️ MRZ error: " + err); }
+          const res = parse(mrzLines.join('\\n'));
+          log("✅ MRZ OK:\\n" + JSON.stringify(res.fields, null, 2));
+        } catch (err) {
+          log("⚠️ MRZ error: " + (err && err.message ? err.message : err));
+        }
+      } else {
+        log("ℹ️ No se detectó MRZ; sigo con OCR general.");
       }
 
       // ---------- Excel ----------
@@ -89,16 +116,18 @@
       const buf = await (await fetch('1234.xlsx')).arrayBuffer();
       const wb  = XLSX.read(buf);
       const ws  = wb.Sheets[wb.SheetNames[0]];
+      // Marca mínima para verificar escritura (no toca tus campos)
       XLSX.utils.sheet_add_aoa(ws, [["OCR OK"]], { origin:"B1" });
       const out = XLSX.write(wb, { bookType:'xlsx', type:'array' });
       const blob = new Blob([out], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const url = URL.createObjectURL(blob);
+      const url  = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = 'salida.xlsx'; a.click();
       log("💾 Excel exportado: salida.xlsx");
 
     } catch (err) {
-      log("❌ Error OCR: " + (err.message || err));
+      log("❌ Error OCR: " + (err && err.message ? err.message : err));
+      log("Suele arreglarse usando solo 'eng' o actualizando tesseract.min.js a v4.1.1. Este HTML ya reintenta eng/spa automáticamente.");
     }
   };
   </script>
