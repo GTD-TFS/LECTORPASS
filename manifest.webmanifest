@@ -1,13 +1,13 @@
 {
-  "name": "Captura y Exportación Offline",
+  "name": "OCR Offline → Excel",
   "short_name": "OCR Offline",
-  "start_url": "/index.html",
+  "start_url": "index.html",
   "display": "standalone",
   "background_color": "#ffffff",
-  "theme_color": "#ffffff",
+  "theme_color": "#007bff",
   "icons": [
     {
-      "src": "icons/icon512.png",
+      "src": "icon512.png",
       "sizes": "512x512",
       "type": "image/png"
     }
