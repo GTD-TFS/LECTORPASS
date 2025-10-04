@@ -1,12 +1,11 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Captura y Exportación Offline</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OCR Offline → Excel</title>
 
-  <!-- Manifest y Service Worker -->
-  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="manifest" href="manifest.webmanifest">
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('sw.js');
@@ -15,35 +14,39 @@
 
   <style>
     body {
-      font-family: system-ui, sans-serif;
-      margin: 2rem;
-      background: #fafafa;
-      color: #222;
-      text-align: center;
+      font-family: system-ui,sans-serif;
+      background:#f4f4f4;
+      color:#222;
+      text-align:center;
+      padding:2rem;
     }
     button {
-      font-size: 1rem;
-      padding: 1rem 2rem;
-      border: none;
-      border-radius: 10px;
-      background: #007bff;
-      color: white;
-      cursor: pointer;
-      margin-top: 2rem;
+      background:#007bff;
+      color:#fff;
+      border:none;
+      border-radius:8px;
+      padding:1rem 2rem;
+      font-size:1.1rem;
+      cursor:pointer;
+      margin-top:1rem;
     }
-    button:hover {
-      background: #0056b3;
-    }
+    button:hover {background:#0056b3;}
+    #log {white-space:pre-wrap;text-align:left;
+      background:#fff;border:1px solid #ccc;
+      border-radius:6px;padding:1rem;margin-top:2rem;
+      max-height:300px;overflow:auto;}
   </style>
 </head>
 <body>
-  <h1>Captura y Exportación Offline</h1>
-  <p>Esta app funciona sin conexión. Pulsa el botón para capturar un documento.</p>
+  <h1>Captura y exportación offline</h1>
+  <p>Pulsa para hacer una foto o elegir un documento.</p>
 
-  <input id="fileInput" type="file" accept="image/*" capture="environment" hidden />
-  <button id="captureBtn">📷 Capturar documento</button>
+  <input id="fileInput" type="file" accept="image/*" capture="environment" hidden>
+  <button id="captureBtn">📸 Capturar / Elegir imagen</button>
 
-  <!-- Librerías locales (todas en la misma carpeta) -->
+  <div id="log"></div>
+
+  <!-- 🔧 Librerías locales -->
   <script src="opencv.js"></script>
   <script src="exifr.min.js"></script>
   <script src="xlsx.full.min.js"></script>
@@ -51,10 +54,71 @@
   <script src="worker.min.js"></script>
   <script src="tesseract-core-simd.js"></script>
 
-  <!-- Parser MRZ (módulo ES) -->
+  <!-- Parser MRZ (ESM) -->
   <script type="module" src="mrz.esm.js"></script>
 
-  <!-- App principal -->
-  <script src="app.js"></script>
+  <script>
+  const log = msg => {
+    document.getElementById('log').textContent += msg + "\\n";
+    console.log(msg);
+  };
+  const input = document.getElementById('fileInput');
+  document.getElementById('captureBtn').onclick = () => input.click();
+
+  input.onchange = async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    log("📸 Imagen seleccionada.");
+
+    const image = URL.createObjectURL(file);
+
+    // ---------- OCR ----------
+    log("🔍 Iniciando OCR...");
+    const { createWorker } = Tesseract;
+    const worker = await createWorker({
+      workerPath: 'worker.min.js',
+      corePath: 'tesseract-core-simd.js',
+      langPath: '.',
+      logger: m => log(m.status + " " + (m.progress ? Math.round(m.progress*100)+"%" : "")),
+    });
+    await worker.loadLanguage('spa+eng');
+    await worker.initialize('spa+eng');
+    const { data: { text } } = await worker.recognize(image);
+    await worker.terminate();
+    log("✅ OCR completado.");
+
+    // ---------- MRZ ----------
+    const mrzLines = text.split(/\\n/).filter(l => l.includes('<'));
+    if (mrzLines.length >= 2) {
+      log("🧾 MRZ detectada. Analizando...");
+      try {
+        const { parse } = await import('./mrz.esm.js');
+        const res = parse(mrzLines.join('\\n'));
+        log("✅ MRZ válida: " + JSON.stringify(res.fields, null, 2));
+      } catch (err) {
+        log("⚠️ Error interpretando MRZ: " + err);
+      }
+    } else {
+      log("⚠️ No se detectó MRZ, usando OCR general.");
+    }
+
+    // ---------- Excel ----------
+    log("📊 Cargando plantilla Excel...");
+    const data = await (await fetch('1234.xlsx')).arrayBuffer();
+    const wb = XLSX.read(data);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+
+    // Escribe una marca para confirmar escritura
+    XLSX.utils.sheet_add_aoa(ws,[["Procesado offline OK"]],{origin:"B1"});
+
+    const out = XLSX.write(wb,{bookType:"xlsx",type:"array"});
+    const blob = new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href=url; a.download='salida.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    log("💾 Excel exportado (salida.xlsx).");
+  };
+  </script>
 </body>
 </html>
