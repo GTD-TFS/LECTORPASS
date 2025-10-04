@@ -7,4 +7,5 @@ self.fetch = async function(r, i) {
   }
   return origFetch(r, i);
 };
-importScripts('worker.min.js');
+importScripts(location.origin + location.pathname + 'worker.min.js');
+
