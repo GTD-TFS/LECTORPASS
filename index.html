@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Captura y Exportación Offline</title>
+
+  <!-- Manifest y Service Worker -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js');
+    }
+  </script>
+
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 2rem;
+      background: #fafafa;
+      color: #222;
+      text-align: center;
+    }
+    button {
+      font-size: 1rem;
+      padding: 1rem 2rem;
+      border: none;
+      border-radius: 10px;
+      background: #007bff;
+      color: white;
+      cursor: pointer;
+      margin-top: 2rem;
+    }
+    button:hover {
+      background: #0056b3;
+    }
+  </style>
+</head>
+<body>
+  <h1>Captura y Exportación Offline</h1>
+  <p>Esta app funciona sin conexión. Pulsa el botón para capturar un documento.</p>
+
+  <input id="fileInput" type="file" accept="image/*" capture="environment" hidden />
+  <button id="captureBtn">📷 Capturar documento</button>
+
+  <!-- Librerías locales (todas en la misma carpeta) -->
+  <script src="opencv.js"></script>
+  <script src="exifr.min.js"></script>
+  <script src="xlsx.full.min.js"></script>
+  <script src="tesseract.min.js"></script>
+  <script src="worker.min.js"></script>
+  <script src="tesseract-core-simd.js"></script>
+
+  <!-- Parser MRZ (módulo ES) -->
+  <script type="module" src="mrz.esm.js"></script>
+
+  <!-- App principal -->
+  <script src="app.js"></script>
+</body>
+</html>
