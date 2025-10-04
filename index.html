@@ -4,16 +4,55 @@
   <meta charset="UTF-8">
   <title>OCR Documentos → Excel</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
   <style>
-    body { font-family:sans-serif; padding:2rem; background:#f4f4f4; text-align:center; }
-    button { padding:1rem 2rem; font-size:1rem; margin:1rem; }
-    #log { text-align:left; background:#fff; padding:1rem; border:1px solid #ccc; margin-top:1rem; max-height:300px; overflow:auto; white-space:pre-wrap; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f6f6f6;
+      text-align: center;
+      padding: 2rem;
+    }
+    h1 { color: #222; margin-bottom: 1rem; }
+    button {
+      background: #1976d2;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 1rem 2rem;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+    button:hover { background: #125a9c; }
+    #log {
+      text-align: left;
+      background: white;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      padding: 1rem;
+      margin-top: 1rem;
+      max-height: 350px;
+      overflow-y: auto;
+      font-size: 0.9rem;
+      white-space: pre-wrap;
+    }
   </style>
+
+  <!-- ⚙️ Forzar recarga limpia y eliminar service worker -->
+  <script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(list => list.forEach(r => r.unregister()));
+    caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
+  }
+  if (!location.search.includes('v=')) {
+    const v = 'v' + Math.random().toString(36).substring(2, 8);
+    location.href = location.pathname + '?' + v;
+  }
+  </script>
 </head>
 <body>
   <h1>OCR Documentos → Excel</h1>
-  <input id="fileInput" type="file" accept="image/*" capture="environment" multiple hidden>
-  <button id="captureBtn">📸 Subir imágenes</button>
+  <input id="fileInput" type="file" accept="image/*" multiple hidden>
+  <button id="captureBtn">📸 Subir imágenes (anverso y reverso)</button>
 
   <div id="log"></div>
 
@@ -23,15 +62,16 @@
 
   <script>
     const log = msg => {
-      const el=document.getElementById("log");
+      const el = document.getElementById("log");
       el.textContent += msg + "\n";
+      el.scrollTop = el.scrollHeight;
       console.log(msg);
     };
 
     document.getElementById("captureBtn").onclick = () => document.getElementById("fileInput").click();
 
-    // --- Parsers ---
-    function parseAny(text){
+    // === PARSERS ===
+    function parseAny(text) {
       const up = text.toUpperCase();
       if (up.includes("APELLIDOS") || up.includes("DOCUMENTO NACIONAL DE IDENTIDAD")) return parseDNI(text);
       if (up.includes("PASAPORTE") || up.includes("PASSPORT") || up.includes("SURNAME")) return parsePassport(text);
@@ -40,110 +80,115 @@
       return {};
     }
 
-    function parseDNI(text){
-      const lines=text.split(/\n+/).map(l=>l.trim()).filter(Boolean);
-      const d={};
-      for(let i=0;i<lines.length;i++){
-        const up=lines[i].toUpperCase();
-        if(up.includes("APELLIDOS")) d.apellidos=lines[i+1]||"";
-        if(up.includes("NOMBRE")) d.nombre=lines[i+1]||"";
-        if(up.includes("NACIONALIDAD")) d.nacionalidad=lines[i+1]||"";
-        if(up.includes("FECHA DE NACIMIENTO")) d.fecha=lines[i+1]||"";
-        if(up.includes("SEXO")) d.sexo=(lines[i+1]||up.replace("SEXO","")).trim();
+    function parseDNI(text) {
+      const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
+      const d = {};
+      for (let i = 0; i < lines.length; i++) {
+        const up = lines[i].toUpperCase();
+        if (up.includes("APELLIDOS")) d.apellidos = lines[i+1] || "";
+        if (up.includes("NOMBRE")) d.nombre = lines[i+1] || "";
+        if (up.includes("NACIONALIDAD")) d.nacionalidad = lines[i+1] || "";
+        if (up.includes("FECHA DE NACIMIENTO")) d.fecha = lines[i+1] || "";
+        if (up.includes("SEXO")) d.sexo = (lines[i+1] || up.replace("SEXO","")).trim();
       }
       return d;
     }
 
-    function parsePassport(text){
-      const lines=text.split(/\n+/).map(l=>l.trim()).filter(Boolean);
-      const d={};
-      for(let i=0;i<lines.length;i++){
-        const up=lines[i].toUpperCase();
-        if(up.includes("SURNAME")) d.apellidos=lines[i+1]||"";
-        if(up.includes("GIVEN NAMES")) d.nombre=lines[i+1]||"";
-        if(up.includes("NATIONALITY")) d.nacionalidad=lines[i+1]||"";
-        if(up.includes("DATE OF BIRTH")) d.fecha=lines[i+1]||"";
-        if(up.startsWith("SEX")) d.sexo=(lines[i+1]||up.replace("SEX","")).trim();
+    function parsePassport(text) {
+      const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
+      const d = {};
+      for (let i = 0; i < lines.length; i++) {
+        const up = lines[i].toUpperCase();
+        if (up.includes("SURNAME")) d.apellidos = lines[i+1] || "";
+        if (up.includes("GIVEN NAMES")) d.nombre = lines[i+1] || "";
+        if (up.includes("NATIONALITY")) d.nacionalidad = lines[i+1] || "";
+        if (up.includes("DATE OF BIRTH")) d.fecha = lines[i+1] || "";
+        if (up.startsWith("SEX")) d.sexo = (lines[i+1] || up.replace("SEX","")).trim();
       }
       return d;
     }
 
-    function parseMRZ(text){
-      const d={};
-      const mrz=text.split(/\n+/).filter(l=>l.includes('<'));
-      if(mrz.length){
-        const l1=mrz[0], l2=mrz[1]||"";
-        const parts=l1.split('<<');
-        if(parts[0]) d.apellidos=parts[0].replace(/^.*?[A-Z]{3}/,'').replace(/</g,' ');
-        if(parts[1]) d.nombre=parts[1].replace(/</g,' ').trim();
-        const dob=l2.substr(0,6);
-        if(/\d{6}/.test(dob)){
-          d.fecha=dob.substr(4,2)+"/"+dob.substr(2,2)+"/19"+dob.substr(0,2);
+    function parseMRZ(text) {
+      const d = {};
+      const mrz = text.split(/\n+/).filter(l => l.includes('<'));
+      if (mrz.length) {
+        const l1 = mrz[0], l2 = mrz[1] || "";
+        const parts = l1.split('<<');
+        if (parts[0]) d.apellidos = parts[0].replace(/^.*?[A-Z]{3}/,'').replace(/</g,' ');
+        if (parts[1]) d.nombre = parts[1].replace(/</g,' ').trim();
+        const dob = l2.substr(0,6);
+        if (/\d{6}/.test(dob)) d.fecha = dob.substr(4,2)+"/"+dob.substr(2,2)+"/19"+dob.substr(0,2);
+        d.sexo = /M/.test(l2) ? "M" : (/F/.test(l2) ? "F" : "");
+        const nat = l1.substr(2,3);
+        d.nacionalidad = nat;
+      }
+      return d;
+    }
+
+    function parseDriver(text) {
+      const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
+      const d = {};
+      for (let l of lines) {
+        if (/^1\./.test(l)) d.apellidos = l.replace(/^1\.\s*/, '');
+        if (/^2\./.test(l)) d.nombre = l.replace(/^2\.\s*/, '');
+        if (/^3\./.test(l)) d.fecha = l.replace(/^3\.\s*/, '');
+      }
+      return d;
+    }
+
+    // === PROCESAMIENTO DE IMÁGENES ===
+    document.getElementById("fileInput").onchange = async e => {
+      const files = Array.from(e.target.files);
+      if (!files.length) return;
+      const results = {};
+
+      for (const f of files) {
+        log("📸 Procesando: " + f.name);
+        const url = URL.createObjectURL(f);
+
+        try {
+          const { data:{ text } } = await Tesseract.recognize(url, 'spa+eng', {
+            langPath: '.', // usa modelos locales .gz
+            logger: m => { if (m.status) log(m.status + " " + Math.round(m.progress*100) + "%"); }
+          });
+
+          const parsed = parseAny(text);
+          Object.assign(results, parsed);
+          log("✅ OCR parcial: " + JSON.stringify(parsed));
+        } catch (err) {
+          log("❌ Error OCR: " + err.message);
         }
-        d.sexo = /M/.test(l2) ? "M" : (/F/.test(l2) ? "F":"");
-        const nat=l1.substr(2,3);
-        d.nacionalidad=nat;
-      }
-      return d;
-    }
-
-    function parseDriver(text){
-      const lines=text.split(/\n+/).map(l=>l.trim()).filter(Boolean);
-      const d={};
-      for(let l of lines){
-        if(/^1\./.test(l)) d.apellidos=l.replace(/^1\.\s*/,'');
-        if(/^2\./.test(l)) d.nombre=l.replace(/^2\.\s*/,'');
-        if(/^3\./.test(l)) d.fecha=l.replace(/^3\.\s*/,'');
-      }
-      return d;
-    }
-
-    // --- Procesar imágenes ---
-    document.getElementById("fileInput").onchange = async e=>{
-      const files=Array.from(e.target.files);
-      if(!files.length) return;
-
-      const results={};
-
-      for(const f of files){
-        log("📸 Procesando "+f.name);
-        const url=URL.createObjectURL(f);
-
-        const { data:{ text } }=await Tesseract.recognize(url,'eng+spa',{
-          langPath: '.', // usa los .gz locales
-          logger:m=>{ if(m.status) log(m.status+" "+Math.round(m.progress*100)+"%"); }
-        });
-
-        const parsed=parseAny(text);
-        Object.assign(results,parsed);
-        log("✅ "+JSON.stringify(parsed));
       }
 
-      log("📊 Final: "+JSON.stringify(results,null,2));
+      log("📊 Datos finales: " + JSON.stringify(results, null, 2));
 
-      // Exportar a Excel
-      const buf=await (await fetch('1234.xlsx')).arrayBuffer();
-      const wb=XLSX.read(buf);
-      const ws=wb.Sheets[wb.SheetNames[0]];
+      // === EXPORTAR A EXCEL ===
+      try {
+        const buf = await (await fetch('1234.xlsx')).arrayBuffer();
+        const wb = XLSX.read(buf);
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const range = XLSX.utils.decode_range(ws['!ref']);
 
-      const range=XLSX.utils.decode_range(ws['!ref']);
-      for(let R=range.s.r;R<=range.e.r;++R){
-        const cellAddr=XLSX.utils.encode_cell({r:R,c:0});
-        const field=ws[cellAddr]?ws[cellAddr].v.toString().toLowerCase():"";
-        if(field.includes("nombre")&&results.nombre) ws[XLSX.utils.encode_cell({r:R,c:1})]={v:results.nombre};
-        if(field.includes("apellidos")&&results.apellidos) ws[XLSX.utils.encode_cell({r:R,c:1})]={v:results.apellidos};
-        if(field.includes("sexo")&&results.sexo) ws[XLSX.utils.encode_cell({r:R,c:1})]={v:results.sexo};
-        if(field.includes("nacionalidad")&&results.nacionalidad) ws[XLSX.utils.encode_cell({r:R,c:1})]={v:results.nacionalidad};
-        if(field.includes("fecha")&&results.fecha) ws[XLSX.utils.encode_cell({r:R,c:1})]={v:results.fecha};
+        for (let R = range.s.r; R <= range.e.r; ++R) {
+          const cellAddr = XLSX.utils.encode_cell({r:R, c:0});
+          const field = ws[cellAddr] ? ws[cellAddr].v.toString().toLowerCase() : "";
+          if (field.includes("nombre") && results.nombre) ws[XLSX.utils.encode_cell({r:R,c:1})] = {v: results.nombre};
+          if (field.includes("apellidos") && results.apellidos) ws[XLSX.utils.encode_cell({r:R,c:1})] = {v: results.apellidos};
+          if (field.includes("sexo") && results.sexo) ws[XLSX.utils.encode_cell({r:R,c:1})] = {v: results.sexo};
+          if (field.includes("nacionalidad") && results.nacionalidad) ws[XLSX.utils.encode_cell({r:R,c:1})] = {v: results.nacionalidad};
+          if (field.includes("fecha") && results.fecha) ws[XLSX.utils.encode_cell({r:R,c:1})] = {v: results.fecha};
+        }
+
+        const out = XLSX.write(wb, {bookType:'xlsx', type:'array'});
+        const blob = new Blob([out], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'salida.xlsx';
+        a.click();
+        log("💾 Excel exportado correctamente.");
+      } catch (err) {
+        log("❌ Error exportando Excel: " + err.message);
       }
-
-      const out=XLSX.write(wb,{bookType:'xlsx',type:'array'});
-      const blob=new Blob([out],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-      const a=document.createElement('a');
-      a.href=URL.createObjectURL(blob);
-      a.download='salida.xlsx';
-      a.click();
-      log("💾 salida.xlsx lista");
     };
   </script>
 </body>
