@@ -1,33 +1,63 @@
-<!-- rebuild -->
 <!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OCR Offline → Excel</title>
 
   <link rel="manifest" href="manifest.webmanifest" />
+
   <script>
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').then(r=>console.log('SW activo:',r.scope));
+    }
   </script>
 
   <style>
-    body { font-family: system-ui,sans-serif; background:#f4f4f4; color:#222; text-align:center; padding:2rem; }
-    button { background:#007bff; color:#fff; border:none; border-radius:8px; padding:1rem 2rem; font-size:1.1rem; cursor:pointer; margin-top:1rem; }
-    button:hover { background:#0056b3; }
-    #log { white-space:pre-wrap; text-align:left; background:#fff; border:1px solid #ccc; border-radius:6px; padding:1rem; margin-top:2rem; max-height:340px; overflow:auto; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f4f4f4;
+      color: #222;
+      text-align: center;
+      padding: 2rem;
+    }
+    button {
+      background: #007bff;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 1rem 2rem;
+      font-size: 1.1rem;
+      cursor: pointer;
+      margin-top: 1rem;
+    }
+    button:hover { background: #0056b3; }
+    #log {
+      white-space: pre-wrap;
+      text-align: left;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      padding: 1rem;
+      margin-top: 2rem;
+      max-height: 340px;
+      overflow: auto;
+    }
   </style>
 </head>
 <body>
   <h1>Captura y exportación offline</h1>
   <p>Pulsa para hacer una foto o elegir un documento.</p>
 
-  <input id="fileInput" type="file" accept="image/*" capture="environment" hidden>
-  <button id="captureBtn">📸 Capturar / Elegir imagen</button>
+  <input id="fileInput" type="file" accept="image/*" capture="environment" hidden />
+  <button id="captureBtn">📸x Capturar / Elegir imagen</button>
 
   <div id="log"></div>
 
-  <!-- Librerías locales (todo en la misma carpeta) -->
+  <!-- Librerías locales -->
   <script src="opencv.js"></script>
   <script src="exifr.min.js"></script>
   <script src="xlsx.full.min.js"></script>
@@ -41,13 +71,29 @@
   document.getElementById('captureBtn').onclick = () =>
     document.getElementById('fileInput').click();
 
-  // 🔧 Parche: si la lib intenta pedir *.traineddata.gz, servimos el mismo nombre sin .gz (porque tú tienes .traineddata plano)
-  const origFetch = window.fetch.bind(window);
-  window.fetch = async (res, init) => {
-    let url = typeof res === 'string' ? res : res.url;
-    if (url.endsWith('.traineddata.gz')) url = url.replace(/\.gz$/, '');
-    return origFetch(url, init);
+  // 🔧 Parche total para builds antiguas de Tesseract
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = async (resource, init) => {
+    let url = typeof resource === 'string' ? resource : resource.url;
+
+    // Si intenta cargar modelo comprimido, devolvemos el plano
+    if (url.endsWith('.traineddata.gz')) {
+      const clean = url.replace(/\.gz$/, '');
+      console.log('🔄 Corrigiendo ruta modelo:', clean);
+      return originalFetch(clean, init);
+    }
+
+    // Si busca dentro de /tessdata/, lo redirigimos a la raíz
+    if (url.includes('/tessdata/')) {
+      const fixed = url.split('/tessdata/').pop();
+      console.log('🔄 Redirigiendo modelo desde tessdata/ →', fixed);
+      return originalFetch(fixed, init);
+    }
+
+    return originalFetch(resource, init);
   };
+
+  const langPath = window.location.origin + window.location.pathname;
 
   async function ocrClassic(imageURL, lang) {
     log(`🔍 Iniciando OCR (modo clásico) con idioma: ${lang} ...`);
@@ -55,13 +101,10 @@
       imageURL,
       lang,
       {
-        // Para builds antiguas, estas opciones son soportadas
-        langPath: '.',
+        langPath,
         gzip: false,
         logger: m => {
-          if (m && m.status) {
-            log(m.status + (m.progress != null ? " " + Math.round(m.progress*100)+"%" : ""));
-          }
+          if (m && m.status) log(m.status + (m.progress != null ? " " + Math.round(m.progress*100)+"%" : ""));
         }
       }
     );
@@ -117,7 +160,6 @@
       const buf = await (await fetch('1234.xlsx')).arrayBuffer();
       const wb  = XLSX.read(buf);
       const ws  = wb.Sheets[wb.SheetNames[0]];
-      // Marca mínima para verificar escritura (no toca tus campos)
       XLSX.utils.sheet_add_aoa(ws, [["OCR OK"]], { origin:"B1" });
       const out = XLSX.write(wb, { bookType:'xlsx', type:'array' });
       const blob = new Blob([out], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -128,7 +170,7 @@
 
     } catch (err) {
       log("❌ Error OCR: " + (err && err.message ? err.message : err));
-      log("Suele arreglarse usando solo 'eng' o actualizando tesseract.min.js a v4.1.1. Este HTML ya reintenta eng/spa automáticamente.");
+      log("👉 Revisa que spa.traineddata y eng.traineddata estén en la raíz y accesibles.");
     }
   };
   </script>
