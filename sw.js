@@ -1,4 +1,4 @@
-const CACHE_NAME = 'offline-v7';
+const CACHE_NAME = 'offline-v9';
 const FILES = [
   './',
   'index.html',
@@ -19,29 +19,26 @@ const FILES = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(FILES))
-  );
+  self.skipWaiting();
+  e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(FILES)));
 });
 
 self.addEventListener('activate', e => {
   e.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.map(k => k !== CACHE_NAME && caches.delete(k)))
-    )
+    caches.keys().then(keys => Promise.all(keys.map(k => k !== CACHE_NAME && caches.delete(k))))
   );
   self.clients.claim();
 });
 
 self.addEventListener('fetch', e => {
   e.respondWith(
-    caches.match(e.request).then(resp => {
-      return resp || fetch(e.request).then(r => {
-        const clone = r.clone();
+    caches.match(e.request).then(hit => {
+      if (hit) return hit;
+      return fetch(e.request).then(res => {
+        const clone = res.clone();
         caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
-        return r;
-      });
-    }).catch(() => caches.match('./'))
+        return res;
+      }).catch(() => caches.match('index.html')); // nunca devuelve undefined
+    })
   );
 });
-
