@@ -1,107 +1,150 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>OCR Offline → Excel</title>
-
-  <!-- Evitar cachés viejas -->
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta http-equiv="Pragma" content="no-cache" />
-  <meta http-equiv="Expires" content="0" />
-
-  <link rel="manifest" href="manifest.webmanifest" />
-
-  <script>
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js');
-    }
-  </script>
-
+  <meta charset="UTF-8">
+  <title>OCR Documentos → Excel</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { font-family: system-ui,sans-serif; background:#f4f4f4; color:#222; text-align:center; padding:2rem; }
-    button { background:#007bff; color:#fff; border:none; border-radius:8px; padding:1rem 2rem; font-size:1.1rem; cursor:pointer; margin-top:1rem; }
-    button:hover { background:#0056b3; }
-    #log { white-space:pre-wrap; text-align:left; background:#fff; border:1px solid #ccc; border-radius:6px; padding:1rem; margin-top:2rem; max-height:340px; overflow:auto; }
+    body { font-family:sans-serif; padding:2rem; background:#f4f4f4; text-align:center; }
+    button { padding:1rem 2rem; font-size:1rem; margin:1rem; }
+    #log { text-align:left; background:#fff; padding:1rem; border:1px solid #ccc; margin-top:1rem; max-height:300px; overflow:auto; white-space:pre-wrap; }
   </style>
 </head>
 <body>
-  <h1>Captura y exportación offline</h1>
-  <p>Pulsa para hacer una foto o elegir un documento.</p>
-
-  <input id="fileInput" type="file" accept="image/*" capture="environment" hidden />
-  <button id="captureBtn">📸 Capturar / Elegir imagen</button>
+  <h1>OCR Documentos → Excel</h1>
+  <input id="fileInput" type="file" accept="image/*" capture="environment" multiple hidden>
+  <button id="captureBtn">📸 Subir imágenes</button>
 
   <div id="log"></div>
 
   <!-- Librerías locales -->
-  <script src="opencv.js"></script>
-  <script src="exifr.min.js"></script>
-  <script src="xlsx.full.min.js"></script>
   <script src="tesseract.min.js"></script>
-  <script type="module" src="mrz.esm.js"></script>
+  <script src="xlsx.full.min.js"></script>
 
   <script>
-  const log = m => { const el = document.getElementById('log'); el.textContent += m + "\n"; console.log(m); };
-  document.getElementById('captureBtn').onclick = () => document.getElementById('fileInput').click();
+    const log = msg => {
+      const el=document.getElementById("log");
+      el.textContent += msg + "\n";
+      console.log(msg);
+    };
 
-  document.getElementById('fileInput').onchange = async e => {
-    const file = e.target.files[0];
-    if (!file) return;
-    log("📸 Imagen seleccionada.");
+    document.getElementById("captureBtn").onclick = () => document.getElementById("fileInput").click();
 
-    const imageURL = URL.createObjectURL(file);
+    // --- Parsers ---
+    function parseAny(text){
+      const up = text.toUpperCase();
+      if (up.includes("APELLIDOS") || up.includes("DOCUMENTO NACIONAL DE IDENTIDAD")) return parseDNI(text);
+      if (up.includes("PASAPORTE") || up.includes("PASSPORT") || up.includes("SURNAME")) return parsePassport(text);
+      if (/\<</.test(up)) return parseMRZ(text);
+      if (up.includes("PERMISO DE CONDUCIR") || /\b1\./.test(up)) return parseDriver(text);
+      return {};
+    }
 
-    try {
-      log("🔍 Iniciando OCR (Tesseract 4.1.1)…");
+    function parseDNI(text){
+      const lines=text.split(/\n+/).map(l=>l.trim()).filter(Boolean);
+      const d={};
+      for(let i=0;i<lines.length;i++){
+        const up=lines[i].toUpperCase();
+        if(up.includes("APELLIDOS")) d.apellidos=lines[i+1]||"";
+        if(up.includes("NOMBRE")) d.nombre=lines[i+1]||"";
+        if(up.includes("NACIONALIDAD")) d.nacionalidad=lines[i+1]||"";
+        if(up.includes("FECHA DE NACIMIENTO")) d.fecha=lines[i+1]||"";
+        if(up.includes("SEXO")) d.sexo=(lines[i+1]||up.replace("SEXO","")).trim();
+      }
+      return d;
+    }
 
-      // Usa el worker parcheado y rutas absolutas seguras en el propio worker
-      const BASE = window.location.origin + (window.location.pathname.replace(/[^/]+$/, ''));
-      const worker = await Tesseract.createWorker({
-        workerPath: BASE + 'worker-patched.js',  // <- archivo parcheado
-        corePath:   BASE + 'tesseract-core-simd.js',
-        langPath:   BASE,        // spa/eng en la raíz
-        gzip: false,
-        logger: m => { if (m.status) log(m.status + (m.progress!=null ? " " + Math.round(m.progress*100)+"%" : "")); }
-      });
+    function parsePassport(text){
+      const lines=text.split(/\n+/).map(l=>l.trim()).filter(Boolean);
+      const d={};
+      for(let i=0;i<lines.length;i++){
+        const up=lines[i].toUpperCase();
+        if(up.includes("SURNAME")) d.apellidos=lines[i+1]||"";
+        if(up.includes("GIVEN NAMES")) d.nombre=lines[i+1]||"";
+        if(up.includes("NATIONALITY")) d.nacionalidad=lines[i+1]||"";
+        if(up.includes("DATE OF BIRTH")) d.fecha=lines[i+1]||"";
+        if(up.startsWith("SEX")) d.sexo=(lines[i+1]||up.replace("SEX","")).trim();
+      }
+      return d;
+    }
 
-      await worker.loadLanguage('spa+eng');
-      await worker.initialize('spa+eng');
-
-      const { data: { text } } = await worker.recognize(imageURL);
-      await worker.terminate();
-
-      log("✅ OCR completado.\n" + text.slice(0,500));
-
-      // (Opcional) MRZ
-      const mrzLines = text.split(/\n/).filter(l => l.includes('<'));
-      if (mrzLines.length >= 2) {
-        try {
-          const { parse } = await import('./mrz.esm.js');
-          const res = parse(mrzLines.join('\n'));
-          log("🧾 MRZ OK:\n" + JSON.stringify(res.fields, null, 2));
-        } catch (err) {
-          log("⚠️ MRZ error: " + (err && err.message ? err.message : err));
+    function parseMRZ(text){
+      const d={};
+      const mrz=text.split(/\n+/).filter(l=>l.includes('<'));
+      if(mrz.length){
+        const l1=mrz[0], l2=mrz[1]||"";
+        const parts=l1.split('<<');
+        if(parts[0]) d.apellidos=parts[0].replace(/^.*?[A-Z]{3}/,'').replace(/</g,' ');
+        if(parts[1]) d.nombre=parts[1].replace(/</g,' ').trim();
+        const dob=l2.substr(0,6);
+        if(/\d{6}/.test(dob)){
+          d.fecha=dob.substr(4,2)+"/"+dob.substr(2,2)+"/19"+dob.substr(0,2);
         }
+        d.sexo = /M/.test(l2) ? "M" : (/F/.test(l2) ? "F":"");
+        const nat=l1.substr(2,3);
+        d.nacionalidad=nat;
+      }
+      return d;
+    }
+
+    function parseDriver(text){
+      const lines=text.split(/\n+/).map(l=>l.trim()).filter(Boolean);
+      const d={};
+      for(let l of lines){
+        if(/^1\./.test(l)) d.apellidos=l.replace(/^1\.\s*/,'');
+        if(/^2\./.test(l)) d.nombre=l.replace(/^2\.\s*/,'');
+        if(/^3\./.test(l)) d.fecha=l.replace(/^3\.\s*/,'');
+      }
+      return d;
+    }
+
+    // --- Procesar imágenes ---
+    document.getElementById("fileInput").onchange = async e=>{
+      const files=Array.from(e.target.files);
+      if(!files.length) return;
+
+      const results={};
+
+      for(const f of files){
+        log("📸 Procesando "+f.name);
+        const url=URL.createObjectURL(f);
+
+        const { data:{ text } }=await Tesseract.recognize(url,'eng+spa',{
+          langPath: '.', // usa los .gz locales
+          logger:m=>{ if(m.status) log(m.status+" "+Math.round(m.progress*100)+"%"); }
+        });
+
+        const parsed=parseAny(text);
+        Object.assign(results,parsed);
+        log("✅ "+JSON.stringify(parsed));
       }
 
-      // Exportar Excel (marca simple en B1)
-      log("📊 Cargando plantilla Excel...");
-      const buf = await (await fetch('1234.xlsx')).arrayBuffer();
-      const wb  = XLSX.read(buf);
-      const ws  = wb.Sheets[wb.SheetNames[0]];
-      XLSX.utils.sheet_add_aoa(ws, [["OCR OK"]], { origin:"B1" });
-      const out = XLSX.write(wb, { bookType:'xlsx', type:'array' });
-      const blob = new Blob([out], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const url  = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = 'salida.xlsx'; a.click();
-      log("💾 Excel exportado: salida.xlsx");
+      log("📊 Final: "+JSON.stringify(results,null,2));
 
-    } catch (err) {
-      log("❌ Error OCR: " + (err && err.message ? err.message : err));
-    }
-  };
+      // Exportar a Excel
+      const buf=await (await fetch('1234.xlsx')).arrayBuffer();
+      const wb=XLSX.read(buf);
+      const ws=wb.Sheets[wb.SheetNames[0]];
+
+      const range=XLSX.utils.decode_range(ws['!ref']);
+      for(let R=range.s.r;R<=range.e.r;++R){
+        const cellAddr=XLSX.utils.encode_cell({r:R,c:0});
+        const field=ws[cellAddr]?ws[cellAddr].v.toString().toLowerCase():"";
+        if(field.includes("nombre")&&results.nombre) ws[XLSX.utils.encode_cell({r:R,c:1})]={v:results.nombre};
+        if(field.includes("apellidos")&&results.apellidos) ws[XLSX.utils.encode_cell({r:R,c:1})]={v:results.apellidos};
+        if(field.includes("sexo")&&results.sexo) ws[XLSX.utils.encode_cell({r:R,c:1})]={v:results.sexo};
+        if(field.includes("nacionalidad")&&results.nacionalidad) ws[XLSX.utils.encode_cell({r:R,c:1})]={v:results.nacionalidad};
+        if(field.includes("fecha")&&results.fecha) ws[XLSX.utils.encode_cell({r:R,c:1})]={v:results.fecha};
+      }
+
+      const out=XLSX.write(wb,{bookType:'xlsx',type:'array'});
+      const blob=new Blob([out],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download='salida.xlsx';
+      a.click();
+      log("💾 salida.xlsx lista");
+    };
   </script>
 </body>
 </html>
